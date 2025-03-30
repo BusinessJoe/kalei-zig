@@ -391,12 +391,20 @@ const RelTable = struct {
     }
 
     pub fn update_with_coset_table(self: *Self, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !void {
-        for (self.table.items) |row| {
-            try self.update_row_with_coset_table(row, coset_table, deductions);
+        var i: usize = 0;
+        while (i < self.table.items.len) {
+            const row = self.table.items[i];
+            if (try self.update_row_with_coset_table(row, coset_table, deductions)) {
+                // since the row was completed, we can remove it
+                _ = self.table.orderedRemove(i);
+            } else {
+                i += 1;
+            }
         }
     }
 
-    fn update_row_with_coset_table(self: *Self, row: []?usize, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !void {
+    /// Returns a boolean indicated whether the row was completed
+    fn update_row_with_coset_table(self: *Self, row: []?usize, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !bool {
         // Do two passes, once LTR and once RTL
         for (0..self.rel.len) |col_idx| {
             const gen = self.rel[col_idx];
@@ -416,6 +424,7 @@ const RelTable = struct {
                             .coset_out = row[col_idx + 2].?,
                         };
                         try deductions.append(new_deduction);
+                        return true;
                     }
                 }
             }
@@ -440,10 +449,13 @@ const RelTable = struct {
                             .coset_out = row[col_idx - 1].?,
                         };
                         try deductions.append(new_deduction);
+                        return true;
                     }
                 }
             }
         }
+
+        return false;
     }
 
     pub fn is_full(self: Self) bool {
