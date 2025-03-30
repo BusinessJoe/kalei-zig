@@ -201,6 +201,7 @@ const CosetTable = struct {
     }
 
     pub fn new_coset(self: *Self, id: usize) !void {
+        std.log.info("new coset: {}", .{id});
         for (0..self.num_gens) |gen| {
             const key: Key = .{ .coset = id, .gen = gen };
             try self.map.put(key, null);
@@ -588,7 +589,7 @@ test "cube" {
     try expect(elements.items.len == 48);
 }
 
-test "120 cell" {
+test "[5, 3, 3]" {
     // This group is presented by
     // <a, b, c, d |
     //  a^2, b^2, c^2, d^2,
@@ -613,7 +614,5 @@ test "120 cell" {
     const elements = try all_group_elements(test_allocator, pres);
     defer elements.deinit();
 
-    // std.debug.print("{any}\n", .{elements});
-
-    try expect(elements.items.len == 600);
+    try expect(elements.items.len == 14400); // absolutely wild number ngl
 }
