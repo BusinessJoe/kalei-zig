@@ -3,7 +3,7 @@
 //! start with main.zig instead.
 const std = @import("std");
 const testing = std.testing;
-const group = @import("group/root.zig");
+pub const group = @import("group/root.zig");
 
 test {
     _ = group;
