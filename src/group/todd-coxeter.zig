@@ -76,8 +76,6 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
                         d.coset_out = coincidence.lower;
                     }
                 }
-                // Right now we just panic lol
-                // panic("Coincidences not implemented", .{});
             }
 
             for (rel_tables.items) |*rel_table| {
@@ -104,8 +102,6 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
             try rel_table.new_coset(num_cosets);
         }
         try deductions.append(unknown.to_deduction(num_cosets));
-
-        // if (num_cosets > 1000) panic("Too many cosets", .{});
     }
 
     std.log.debug("Coset table:\n{}\n", .{coset_table});
@@ -344,25 +340,16 @@ const RelTable = struct {
 
     const Key = struct { coset: usize };
     const Table = ArrayList([]?usize);
-    // const Map = AutoHashMap(Key, []?usize);
 
     rel: Relation,
     table: Table,
     allocator: Allocator,
-    // map: Map,
-    // num_cosets: usize,
-    // table_raw: ArrayList(usize),
-    // ignored_rows: ArrayList(usize),
 
     pub fn init(allocator: Allocator, rel: Relation) Self {
         return Self{
             .rel = rel,
             .table = Table.init(allocator),
             .allocator = allocator,
-            // .map = Map.init(allocator),
-            // .num_cosets = 0,
-            // .table_raw = ArrayList(usize).init(allocator),
-            // .ignored_rows = ArrayList(usize).init(allocator),
         };
     }
 
@@ -372,10 +359,6 @@ const RelTable = struct {
         }
         self.table.deinit();
     }
-
-    // pub fn coset_count(self: Self) usize {
-    //     return self.map.count();
-    // }
 
     pub fn new_coset(self: *Self, id: usize) !void {
         var row = try self.allocator.alloc(?usize, self.rel.len + 1);
@@ -477,26 +460,6 @@ const RelTable = struct {
                 }
             }
         }
-
-        // iter = self.map.iterator();
-        // while (iter.next()) |entry| {
-        //     const row = entry.value_ptr.*;
-        //     for (0.., row) |gen, coset_out| {
-        //         // New deduction
-        //         var coset_in: ?usize = entry.key_ptr.coset;
-        //         if (gen != 0) {
-        //             coset_in = row[gen - 1];
-        //         }
-        //         if (coset_out != null and coset_in != null) {
-        //             const d = Deduction{
-        //                 .gen = gen,
-        //                 .coset_out = coset_out.?,
-        //                 .coset_in = coset_in.?,
-        //             };
-        //             try deductions.append(d);
-        //         }
-        //     }
-        // }
     }
 };
 
@@ -595,8 +558,6 @@ test "cube" {
 
     const elements = try all_group_elements(test_allocator, pres);
     defer elements.deinit();
-
-    // std.debug.print("{any}\n", .{elements});
 
     try expect(elements.items.len == 48);
 }
