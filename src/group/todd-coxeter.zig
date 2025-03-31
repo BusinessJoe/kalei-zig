@@ -18,8 +18,6 @@ const Relation = presentation.Relation;
 /// by the given presentation. All generators must be involutions.
 /// The return elements are represented by a word made from the presentation's generators.
 pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
-    lookups = 0;
-
     var coset_table = CosetTable.init(allocator, pres.num_gens);
     defer coset_table.deinit();
 
@@ -36,9 +34,9 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
     }
 
     // Add first coset to coset_table and rel_tables
-    try coset_table.new_coset(1);
+    try coset_table.new_coset(0);
     for (rel_tables.items) |*rel_table| {
-        try rel_table.new_coset(1);
+        try rel_table.new_coset(0);
     }
 
     // Deductions and coincidences which have yet to be procesed are stored in a stack
@@ -66,7 +64,7 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
                 // Then fill in all possible entries of the tables
 
                 std.log.debug("Coincidence! {}\n", .{coincidence});
-                try coset_table.handle_coincidence(coincidence, &coincidences);
+                try coset_table.handle_coincidence(coincidence);
                 for (rel_tables.items) |*rel_table| {
                     try rel_table.handle_coincidence(coincidence);
                 }
@@ -85,9 +83,8 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
             }
         }
 
-        // the algorithm terminates when all the tables are full
+        // the algorithm terminates when all the relation tables are full (TODO: justify why coset table doesn't need to be checked)
         var all_full = true;
-        all_full = all_full and coset_table.is_full();
         for (rel_tables.items) |rel_table| {
             all_full = all_full and rel_table.is_full();
         }
@@ -97,17 +94,16 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
 
         // otherwise we add a new coset to the coset table, creating a deduction
         num_cosets += 1;
-        std.log.debug("Adding coset {}\n", .{num_cosets});
+        std.log.debug("Adding coset {}\n", .{num_cosets - 1});
         const unknown = coset_table.find_unknown();
-        try coset_table.new_coset(num_cosets);
+        try coset_table.new_coset(num_cosets - 1);
         for (rel_tables.items) |*rel_table| {
-            try rel_table.new_coset(num_cosets);
+            try rel_table.new_coset(num_cosets - 1);
         }
-        try deductions.append(unknown.to_deduction(num_cosets));
+        try deductions.append(unknown.to_deduction(num_cosets - 1));
     }
 
     std.log.debug("Coset table:\n{}\n", .{coset_table});
-    std.log.info("NLookups: {}\n", .{lookups});
 
     // Now that the coset table is complete, we can build the group's elements
     return try elements_from_coset_table(allocator, coset_table);
@@ -129,16 +125,16 @@ fn elements_from_coset_table(allocator: Allocator, coset_table: CosetTable) !Ele
 
     var coset_stack = ArrayList(usize).init(allocator);
     defer coset_stack.deinit();
-    try coset_stack.append(1); // We've only added the first coset (the identity) so far
+    try coset_stack.append(0); // We've only added the first coset (the identity) so far
 
     while (coset_stack.pop()) |coset_in| {
         for (0..coset_table.num_gens) |gen| {
             // The table is filled so this lookup always succeeds
             const coset_out = coset_table.lookup(coset_in, gen).?;
-            if (coset_out != 1 and elements[coset_out - 1].items.len == 0) {
-                const word = elements[coset_in - 1];
-                try elements[coset_out - 1].appendSlice(word.items);
-                try elements[coset_out - 1].append(gen);
+            if (coset_out != 0 and elements[coset_out].items.len == 0) {
+                const word = elements[coset_in];
+                try elements[coset_out].appendSlice(word.items);
+                try elements[coset_out].append(gen);
                 try coset_stack.append(coset_out);
             }
         }
@@ -169,16 +165,13 @@ const Elements = struct {
     }
 };
 
-var lookups: u64 = 0;
-
 const CosetTable = struct {
     const Self = @This();
 
     const Key = struct { coset: usize, gen: usize };
-    const Map = AutoHashMap(Key, ?usize);
 
     num_gens: usize,
-    map: Map,
+    table: ArrayList([]?usize),
     /// This gives our unknowns an order for `find_unknown` to use
     next_unknowns: ArrayList(Key),
     allocator: Allocator,
@@ -186,33 +179,39 @@ const CosetTable = struct {
     pub fn init(allocator: Allocator, num_gens: usize) Self {
         return Self{
             .num_gens = num_gens,
-            .map = Map.init(allocator),
+            .table = ArrayList([]?usize).init(allocator),
             .next_unknowns = ArrayList(Key).init(allocator),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.map.deinit();
+        for (self.table.items) |row| {
+            self.allocator.free(row);
+        }
+        self.table.deinit();
         self.next_unknowns.deinit();
     }
 
     pub fn coset_count(self: Self) usize {
-        return self.map.count() / self.num_gens;
+        return self.table.items.len;
     }
 
     pub fn new_coset(self: *Self, id: usize) !void {
         std.log.info("new coset: {}", .{id});
+        const row = try self.allocator.alloc(?usize, self.num_gens);
+        errdefer self.allocator.free(row);
+        try self.table.append(row);
+
         for (0..self.num_gens) |gen| {
+            row[gen] = null;
             const key: Key = .{ .coset = id, .gen = gen };
-            try self.map.put(key, null);
             try self.next_unknowns.append(key);
         }
     }
 
     pub fn add_deduction(self: *Self, deduction: Deduction) ?Coincidence {
-        const key: Key = .{ .coset = deduction.coset_in, .gen = deduction.gen };
-        const item_ptr = self.map.getPtr(key).?;
+        const item_ptr = &self.table.items[deduction.coset_in][deduction.gen];
         if (item_ptr.*) |item| {
             if (item != deduction.coset_out) {
                 if (item < deduction.coset_out) {
@@ -233,22 +232,12 @@ const CosetTable = struct {
         return null;
     }
 
-    pub fn is_full(self: Self) bool {
-        var iter = self.map.valueIterator();
-        while (iter.next()) |value| {
-            if (value.* == null) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     fn is_ignored(self: Self, coset: usize) bool {
         return std.mem.indexOfScalar(usize, self.ignored_rows.items, coset) != null;
     }
 
     pub fn find_unknown(self: *Self) Unknown {
-        // Search `next_unkowns` for first actual unknown
+        // Search `next_unknowns` for first actual unknown
         while (true) {
             // TODO: this remove should be O(1)
             const key = self.next_unknowns.orderedRemove(0);
@@ -262,83 +251,53 @@ const CosetTable = struct {
     }
 
     pub fn lookup(self: Self, coset_in: usize, gen: usize) ?usize {
-        lookups += 1;
-        const key: Key = .{ .coset = coset_in, .gen = gen };
-        return self.map.get(key) orelse {
-            panic("key {} {} not found", .{ coset_in, gen });
-        };
+        return self.table.items[coset_in][gen];
     }
 
-    pub fn handle_coincidence(self: *Self, coin: Coincidence, coincidences: *ArrayList(Coincidence)) !void {
-        const Entry = struct { key: Key, value: ?usize };
-        var to_update = ArrayList(Entry).init(self.allocator);
-        defer to_update.deinit();
-
-        // Find entries that need to be updated
-        var iter = self.map.iterator();
-        while (iter.next()) |entry| {
-            if (entry.key_ptr.*.coset == coin.higher or entry.value_ptr.* == coin.higher) {
-                try to_update.append(.{ .key = entry.key_ptr.*, .value = entry.value_ptr.* });
+    pub fn handle_coincidence(self: *Self, coin: Coincidence) !void {
+        for (self.table.items) |row| {
+            for (row) |*entry| {
+                if (entry.* == coin.higher) entry.* = coin.lower;
             }
-        }
-
-        for (to_update.items) |*entry| {
-            const old_opt = self.map.get(entry.key).?;
-            _ = self.map.remove(entry.key);
-            if (old_opt != null and entry.value != null and old_opt.? != entry.value.?) {
-                // If the old value existed, and the new value exists, and both are different
-                const new_coin = Coincidence{
-                    .lower = @min(old_opt.?, entry.value.?),
-                    .higher = @max(old_opt.?, entry.value.?),
-                };
-                try coincidences.append(new_coin);
-            }
-            if (entry.key.coset == coin.higher) {
-                entry.key.coset = coin.lower;
-            }
-            if (entry.value == coin.higher) {
-                entry.value = coin.lower;
-            }
-            try self.map.put(entry.key, entry.value);
         }
     }
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
+    // pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+    //     _ = fmt;
+    //     _ = options;
 
-        try writer.print("\t", .{});
-        for (0..self.num_gens) |gen| {
-            try writer.print("g{}\t", .{gen});
-        }
-        try writer.print("\n", .{});
+    //     try writer.print("\t", .{});
+    //     for (0..self.num_gens) |gen| {
+    //         try writer.print("g{}\t", .{gen});
+    //     }
+    //     try writer.print("\n", .{});
 
-        var processed_cosets: usize = 0;
-        var coset_id: usize = 0;
+    //     var processed_cosets: usize = 0;
+    //     var coset_id: usize = 0;
 
-        while (processed_cosets * self.num_gens < self.map.count()) {
-            if (!self.map.contains(.{ .coset = coset_id, .gen = 0 })) {
-                coset_id += 1;
-                continue;
-            }
+    //     while (processed_cosets * self.num_gens < self.map.count()) {
+    //         if (!self.map.contains(.{ .coset = coset_id, .gen = 0 })) {
+    //             coset_id += 1;
+    //             continue;
+    //         }
 
-            try writer.print("{}\t", .{coset_id});
-            for (0..self.num_gens) |gen| {
-                if (self.map.get(.{ .coset = coset_id, .gen = gen })) |coset_out_opt| {
-                    if (coset_out_opt) |coset_out| {
-                        try writer.print("{}\t", .{coset_out});
-                    } else {
-                        try writer.print("?\t", .{});
-                    }
-                } else {
-                    panic("bad state", .{});
-                }
-            }
-            try writer.print("\n", .{});
-            coset_id += 1;
-            processed_cosets += 1;
-        }
-    }
+    //         try writer.print("{}\t", .{coset_id});
+    //         for (0..self.num_gens) |gen| {
+    //             if (self.map.get(.{ .coset = coset_id, .gen = gen })) |coset_out_opt| {
+    //                 if (coset_out_opt) |coset_out| {
+    //                     try writer.print("{}\t", .{coset_out});
+    //                 } else {
+    //                     try writer.print("?\t", .{});
+    //                 }
+    //             } else {
+    //                 panic("bad state", .{});
+    //             }
+    //         }
+    //         try writer.print("\n", .{});
+    //         coset_id += 1;
+    //         processed_cosets += 1;
+    //     }
+    // }
 };
 
 const RelTableRow = struct {
