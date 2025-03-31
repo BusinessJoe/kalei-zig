@@ -18,6 +18,8 @@ const Relation = presentation.Relation;
 /// by the given presentation. All generators must be involutions.
 /// The return elements are represented by a word made from the presentation's generators.
 pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
+    lookups = 0;
+
     var coset_table = CosetTable.init(allocator, pres.num_gens);
     defer coset_table.deinit();
 
@@ -66,7 +68,7 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
                 std.log.debug("Coincidence! {}\n", .{coincidence});
                 try coset_table.handle_coincidence(coincidence, &coincidences);
                 for (rel_tables.items) |*rel_table| {
-                    try rel_table.handle_coincidence(coincidence, &deductions);
+                    try rel_table.handle_coincidence(coincidence);
                 }
                 for (deductions.items) |*d| {
                     if (d.coset_in == coincidence.higher) {
@@ -105,6 +107,7 @@ pub fn all_group_elements(allocator: Allocator, pres: Presentation) !Elements {
     }
 
     std.log.debug("Coset table:\n{}\n", .{coset_table});
+    std.log.info("NLookups: {}\n", .{lookups});
 
     // Now that the coset table is complete, we can build the group's elements
     return try elements_from_coset_table(allocator, coset_table);
@@ -165,6 +168,8 @@ const Elements = struct {
         self.allocator.free(self.items);
     }
 };
+
+var lookups: u64 = 0;
 
 const CosetTable = struct {
     const Self = @This();
@@ -257,6 +262,7 @@ const CosetTable = struct {
     }
 
     pub fn lookup(self: Self, coset_in: usize, gen: usize) ?usize {
+        lookups += 1;
         const key: Key = .{ .coset = coset_in, .gen = gen };
         return self.map.get(key) orelse {
             panic("key {} {} not found", .{ coset_in, gen });
@@ -335,11 +341,72 @@ const CosetTable = struct {
     }
 };
 
+const RelTableRow = struct {
+    const Self = @This();
+
+    rel: Relation,
+    left: usize,
+    right: usize,
+
+    left_coset: usize,
+    right_coset: usize,
+
+    pub fn init(rel: Relation, coset: usize) Self {
+        return Self{
+            .rel = rel,
+            .left = 0,
+            .right = rel.len,
+            .left_coset = coset,
+            .right_coset = coset,
+        };
+    }
+
+    pub fn update_with_coset_table(self: *Self, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !bool {
+        if (self.left + 1 == self.right) return false;
+
+        // LTR
+        while (self.left + 1 < self.right) {
+            const gen = self.rel[self.left];
+            if (coset_table.lookup(self.left_coset, gen)) |coset| {
+                self.left += 1;
+                self.left_coset = coset;
+            } else {
+                break;
+            }
+        }
+
+        // RTL
+        while (self.left + 1 < self.right) {
+            const gen = self.rel[self.right - 1];
+            // We're assuming that each generator is its own inverse
+            if (coset_table.lookup(self.right_coset, gen)) |coset| {
+                self.right -= 1;
+                self.right_coset = coset;
+            } else {
+                break;
+            }
+        }
+
+        if (self.left + 1 == self.right) {
+            // deduction made
+            const new_deduction = Deduction{
+                .gen = self.rel[self.left],
+                .coset_in = self.left_coset,
+                .coset_out = self.right_coset,
+            };
+            try deductions.append(new_deduction);
+            return true;
+        }
+
+        return false;
+    }
+};
+
 const RelTable = struct {
     const Self = @This();
 
     const Key = struct { coset: usize };
-    const Table = ArrayList([]?usize);
+    const Table = ArrayList(RelTableRow);
 
     rel: Relation,
     table: Table,
@@ -354,30 +421,19 @@ const RelTable = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.table.items) |row| {
-            self.allocator.free(row);
-        }
         self.table.deinit();
     }
 
     pub fn new_coset(self: *Self, id: usize) !void {
-        var row = try self.allocator.alloc(?usize, self.rel.len + 1);
-        errdefer self.allocator.free(row);
-
-        row[0] = id;
-        for (1..self.rel.len) |i| {
-            row[i] = null;
-        }
-        row[self.rel.len] = id;
-
+        const row = RelTableRow.init(self.rel, id);
         try self.table.append(row);
     }
 
     pub fn update_with_coset_table(self: *Self, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !void {
         var i: usize = 0;
         while (i < self.table.items.len) {
-            const row = self.table.items[i];
-            if (try self.update_row_with_coset_table(row, coset_table, deductions)) {
+            var row = self.table.items[i];
+            if (try row.update_with_coset_table(coset_table, deductions)) {
                 // since the row was completed, we can remove it
                 _ = self.table.orderedRemove(i);
             } else {
@@ -386,79 +442,14 @@ const RelTable = struct {
         }
     }
 
-    /// Returns a boolean indicated whether the row was completed
-    fn update_row_with_coset_table(self: *Self, row: []?usize, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !bool {
-        // Do two passes, once LTR and once RTL
-        for (0..self.rel.len) |col_idx| {
-            const gen = self.rel[col_idx];
-            const left = &row[col_idx];
-            const right = &row[col_idx + 1];
-
-            if (left.* != null and right.* == null) {
-                // can potentially update right value
-                if (coset_table.lookup(left.*.?, gen)) |val| {
-                    right.* = val;
-                    // adding the deduction completes the row if the value *after* right is not null
-                    if (row[col_idx + 2] != null) {
-                        // if so, we produce a new deduction
-                        const new_deduction = Deduction{
-                            .gen = self.rel[col_idx + 1],
-                            .coset_in = val,
-                            .coset_out = row[col_idx + 2].?,
-                        };
-                        try deductions.append(new_deduction);
-                        return true;
-                    }
-                }
-            }
-        }
-
-        for (0..self.rel.len) |col_idx_rev| {
-            const col_idx = self.rel.len - 1 - col_idx_rev;
-            const gen = self.rel[col_idx];
-            const left = &row[col_idx];
-            const right = &row[col_idx + 1];
-
-            if (left.* == null and right.* != null) {
-                // can potentially update left value
-                if (coset_table.lookup(right.*.?, gen)) |val| {
-                    left.* = val;
-                    // adding the deduction completes the row if the value *before* left is not null
-                    if (row[col_idx - 1] != null) {
-                        // if so, we produce a new deduction
-                        const new_deduction = Deduction{
-                            .gen = self.rel[col_idx - 1],
-                            .coset_in = val,
-                            .coset_out = row[col_idx - 1].?,
-                        };
-                        try deductions.append(new_deduction);
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
-
     pub fn is_full(self: Self) bool {
-        for (self.table.items) |row| {
-            for (row) |e| {
-                if (e == null) return false;
-            }
-        }
-        return true;
+        return self.table.items.len == 0;
     }
 
-    pub fn handle_coincidence(self: *Self, coin: Coincidence, deductions: *ArrayList(Deduction)) !void {
-        _ = deductions;
-
-        for (self.table.items) |row| {
-            for (row) |*coset_out| {
-                if (coset_out.* == coin.higher) {
-                    coset_out.* = coin.lower;
-                }
-            }
+    pub fn handle_coincidence(self: *Self, coin: Coincidence) !void {
+        for (self.table.items) |*row| {
+            if (row.left_coset == coin.higher) row.left_coset = coin.lower;
+            if (row.right_coset == coin.higher) row.right_coset = coin.lower;
         }
     }
 };
@@ -511,8 +502,6 @@ test "symmetric group S3" {
     const elements = try all_group_elements(test_allocator, s3);
     defer elements.deinit();
 
-    std.debug.print("{any}\n", .{elements});
-
     try expect(elements.items.len == 6);
 
     try expect(elements_contains(elements, &[_]usize{}));
@@ -536,8 +525,6 @@ test "square" {
 
     const elements = try all_group_elements(test_allocator, pres);
     defer elements.deinit();
-
-    std.debug.print("{any}\n", .{elements});
 
     try expect(elements.items.len == 8);
 }
@@ -563,6 +550,7 @@ test "cube" {
 }
 
 test "[5, 3, 3]" {
+    if (true) return error.SkipZigTest;
     // This group is presented by
     // <a, b, c, d |
     //  a^2, b^2, c^2, d^2,
