@@ -171,7 +171,7 @@ const CosetTable = struct {
     const Key = struct { coset: usize, gen: usize };
 
     num_gens: usize,
-    table: ArrayList([]?usize),
+    table: ArrayList(?usize),
     /// This gives our unknowns an order for `find_unknown` to use
     next_unknowns: ArrayList(Key),
     allocator: Allocator,
@@ -179,39 +179,38 @@ const CosetTable = struct {
     pub fn init(allocator: Allocator, num_gens: usize) Self {
         return Self{
             .num_gens = num_gens,
-            .table = ArrayList([]?usize).init(allocator),
+            .table = ArrayList(?usize).init(allocator),
             .next_unknowns = ArrayList(Key).init(allocator),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.table.items) |row| {
-            self.allocator.free(row);
-        }
         self.table.deinit();
         self.next_unknowns.deinit();
     }
 
     pub fn coset_count(self: Self) usize {
-        return self.table.items.len;
+        return self.table.items.len / self.num_gens;
     }
 
     pub fn new_coset(self: *Self, id: usize) !void {
         std.log.info("new coset: {}", .{id});
-        const row = try self.allocator.alloc(?usize, self.num_gens);
-        errdefer self.allocator.free(row);
-        try self.table.append(row);
+        try self.table.appendNTimes(null, self.num_gens);
 
         for (0..self.num_gens) |gen| {
-            row[gen] = null;
             const key: Key = .{ .coset = id, .gen = gen };
             try self.next_unknowns.append(key);
         }
     }
 
+    fn lookup_ptr(self: Self, coset: usize, gen: usize) *?usize {
+        const idx = coset * self.num_gens + gen;
+        return &self.table.items[idx];
+    }
+
     pub fn add_deduction(self: *Self, deduction: Deduction) ?Coincidence {
-        const item_ptr = &self.table.items[deduction.coset_in][deduction.gen];
+        const item_ptr = self.lookup_ptr(deduction.coset_in, deduction.gen);
         if (item_ptr.*) |item| {
             if (item != deduction.coset_out) {
                 if (item < deduction.coset_out) {
@@ -251,14 +250,12 @@ const CosetTable = struct {
     }
 
     pub fn lookup(self: Self, coset_in: usize, gen: usize) ?usize {
-        return self.table.items[coset_in][gen];
+        return self.lookup_ptr(coset_in, gen).*;
     }
 
     pub fn handle_coincidence(self: *Self, coin: Coincidence) !void {
-        for (self.table.items) |row| {
-            for (row) |*entry| {
-                if (entry.* == coin.higher) entry.* = coin.lower;
-            }
+        for (self.table.items) |*entry| {
+            if (entry.* == coin.higher) entry.* = coin.lower;
         }
     }
 
@@ -509,7 +506,6 @@ test "cube" {
 }
 
 test "[5, 3, 3]" {
-    if (true) return error.SkipZigTest;
     // This group is presented by
     // <a, b, c, d |
     //  a^2, b^2, c^2, d^2,
