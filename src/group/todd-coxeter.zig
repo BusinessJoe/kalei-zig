@@ -264,6 +264,7 @@ const CosetTable = struct {
     pub fn lookup(self: Self, coset_in: usize, gen: usize) ?usize {
         lookups += 1;
         const key: Key = .{ .coset = coset_in, .gen = gen };
+        std.log.info("Lookup {any}", .{key});
         return self.map.get(key) orelse {
             panic("key {} {} not found", .{ coset_in, gen });
         };
@@ -362,6 +363,8 @@ const RelTableRow = struct {
     }
 
     pub fn update_with_coset_table(self: *Self, coset_table: CosetTable, deductions: *ArrayList(Deduction)) !bool {
+        std.log.info("row l:{} r:{}", .{ self.left, self.right });
+        defer std.log.info("end l:{} r:{}", .{ self.left, self.right });
         if (self.left + 1 == self.right) return false;
 
         // LTR
