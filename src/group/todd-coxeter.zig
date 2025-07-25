@@ -507,7 +507,7 @@ test "cube" {
 
 test "[5, 3, 3]" {
     // this test works, but just takes a long time so we skip it
-    // if (true) return error.SkipZigTest;
+    if (true) return error.SkipZigTest;
     
     // This group is presented by
     // <a, b, c, d |

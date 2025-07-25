@@ -6,6 +6,7 @@ const pi = std.math.pi;
 const expect = std.testing.expect;
 
 const matrix = @import("matrix.zig");
+
 const Mat = matrix.Mat;
 
 const CoxeterGroup = struct {
@@ -51,8 +52,40 @@ const CoxeterGroup = struct {
 
 const Normal = ArrayList(f64);
 
+/// Returns a list of mirrors which generate the given group.
+/// Each mirror is represented by its normalized normal vector.
 fn gen_mirrors(allocator: Allocator, group: CoxeterGroup) !ArrayList(Normal) {
-    var normals = ArrayList(Normal).init(allocator);
+    const n = group.size();
+    const gram = try Mat(f64).init(allocator, n, n);
+    defer gram.deinit();
+
+    // Initialize Gram matrix
+    for (0..n) |i| {
+        for (0..n) |j| {
+            const angle = group.dihedralAngle(i, j);
+            const dot_prod = @cos(angle);
+            gram.getPtr(i, j).* = dot_prod;
+        }
+    }
+
+    // The "square-root" of a Gram matrix results in a matrix where
+    // each row can be interpreted as a vector.
+    // These vectors have the desired pair-wise dot products as a 
+    // consequence of how matrix multiplication is defined.
+    // We compute the square-root via the Cholesky decomposition.
+
+    const root_mat = try matrix.cholesky_decomp(allocator, gram);
+    defer root_mat.deinit();
+
+    for (0..n) |i| {
+        std.debug.print("[", .{});
+        for (0..n) |j| {
+            std.debug.print("{} ", .{root_mat.get(i, j)});
+        }
+        std.debug.print("]\n", .{});
+    }
+
+    var normals = try ArrayList(Normal).initCapacity(allocator, n);
     errdefer {
         for (normals.items) |norm| {
             norm.deinit();
@@ -60,32 +93,13 @@ fn gen_mirrors(allocator: Allocator, group: CoxeterGroup) !ArrayList(Normal) {
         normals.deinit();
     }
 
-    // This is the very first normal
-    try normals.append(Normal.init(allocator));
-    try normals.items[0].append(1.0);
-
-    // The other normals are created in order
-    for (1..group.size()) |i| {
-        // Start by "extending" each existing vector into a new dimension
-        for (normals.items) |*norm| {
-            try norm.append(0.0);
+    // Now we just have to copy over each row into our output
+    for (0..n) |i| {
+        var norm = Normal.init(allocator);
+        for (0..n) |j| {
+            try norm.append( root_mat.get(i, j) );
         }
-
-        // Create the new normal equal to (1, 0, 0, ...) aka the first normal
-        const newNorm = try normals.items[0].clone();
-        errdefer newNorm.deinit();
-
-        // Rotate this normal to have the correct dihedral angle with each existing normal
-        // TODO: Note that this isn't correct for now
-        for (0.., normals.items) |j, norm| {
-            _ = norm;
-            const order: f64 = @floatFromInt(group.order(i, j));
-            const dihedralAngle: f64 = pi / order;
-
-            rotate(newNorm, dihedralAngle, 0, 1);
-        }
-
-        try normals.append(newNorm);
+        try normals.append(norm);
     }
 
     return normals;
@@ -131,15 +145,16 @@ fn checkAngles(normals: ArrayList(Normal), group: CoxeterGroup) !void {
         for (0.., normals.items) |j, norm2| {
             const expected = group.dihedralAngle(i, j);
             const actual = angleBetween(norm1, norm2);
-            std.debug.print("{any} {any}, {} {}\n", .{ norm1.items, norm2.items, expected, actual });
+            std.debug.print("norm1: {any}, norm2: {any}, expected angle: {d:.3} got: {d:.3}\n", .{ norm1.items, norm2.items, expected, actual });
             try std.testing.expectApproxEqAbs(expected, actual, 0.001);
         }
     }
 }
 
 fn printNormals(normals: ArrayList(Normal)) void {
+    std.debug.print("Normals:\n", .{});
     for (normals.items) |norm| {
-        std.debug.print("{any}, {}\n", .{ norm.items, normalLength(norm) });
+        std.debug.print("  coords: {any}, magnitude: {}\n", .{ norm.items, normalLength(norm) });
     }
 }
 
@@ -327,14 +342,13 @@ test {
     defer group.deinit();
 
     try findNormals(allocator, group);
-    // const normals = try gen_mirrors(allocator, group);
-    // defer {
-    //     for (normals.items) |norm| {
-    //         norm.deinit();
-    //     }
-    //     normals.deinit();
-    // }
+    const normals = try gen_mirrors(allocator, group);
+    defer {
+        for (normals.items) |norm| {
+            norm.deinit();
+        }
+        normals.deinit();
+    }
 
-    // printNormals(normals);
-    // try checkAngles(normals, group);
+    try checkAngles(normals, group);
 }

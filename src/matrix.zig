@@ -254,6 +254,37 @@ pub fn vectorNorm(comptime T: type, vector: Mat(T)) error{NotVector}!T {
     }
 }
 
+/// Perform the Cholesky decomposition of a matrix, returning the lower-triangular part.
+pub fn cholesky_decomp(allocator: Allocator, matrix: Mat(f64)) Allocator.Error!Mat(f64) {
+    if (matrix.rows != matrix.cols) {
+        @panic("matrix must be square");
+    }
+
+    // Implementation of the Cholesky–Banachiewicz algorithm.
+
+    const n = matrix.rows;
+
+    var lower = try Mat(f64).init(allocator, n, n);
+    errdefer lower.deinit();
+
+    for (0..n) |i| {
+        for (0..i+1) |j| {
+            var sum: f64 = 0.0;
+            for (0..j) |k| {
+                sum += lower.get(i, k) * lower.get(j, k);
+            }
+
+            if (i == j) {
+                lower.getPtr(i, j).* = @sqrt(matrix.get(i, i) - sum);
+            } else {
+                lower.getPtr(i, j).* = (1.0 / lower.get(j, j) * (matrix.get(i, j) - sum));
+            }
+        }
+    }
+
+    return lower;
+}
+
 test "matrix multiplication int" {
     const allocator = std.testing.allocator;
     const expectEqual = std.testing.expectEqual;
