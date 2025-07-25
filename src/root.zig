@@ -4,7 +4,11 @@
 const std = @import("std");
 const testing = std.testing;
 pub const group = @import("group/root.zig");
+pub const mirror = @import("mirror.zig");
+pub const matrix = @import("matrix.zig");
 
 test {
     _ = group;
+    _ = mirror;
+    _ = matrix;
 }
